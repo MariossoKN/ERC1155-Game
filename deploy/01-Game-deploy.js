@@ -27,6 +27,8 @@ module.exports = async ({ getNamedAccounts, deployments }) => {
         subscriptionId,
         networkConfig[chainId]["requestConfirmations"],
         networkConfig[chainId]["callbackGasLimit"],
+        networkConfig[chainId]["weaponUpgradePrice"],
+        networkConfig[chainId]["legendaryFireSwordPrice"],
     ]
     const blockConfirmations = network.config.blockConfirmations
 

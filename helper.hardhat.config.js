@@ -6,6 +6,8 @@ const networkConfig = {
         subId: "1754",
         requestConfirmations: "3",
         callbackGasLimit: "100000",
+        weaponUpgradePrice: "5",
+        legendaryFireSwordPrice: "5",
     },
     31337: {
         name: "hardhat",
@@ -14,6 +16,8 @@ const networkConfig = {
         subId: "1",
         requestConfirmations: "3",
         callbackGasLimit: "100000",
+        weaponUpgradePrice: "5",
+        legendaryFireSwordPrice: "5",
     },
 }
 

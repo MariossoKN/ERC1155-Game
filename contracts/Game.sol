@@ -7,9 +7,10 @@ pragma solidity ^0.8.19;
 import {VRFCoordinatorV2Interface} from "@chainlink/contracts/src/v0.8/interfaces/VRFCoordinatorV2Interface.sol";
 import {VRFConsumerBaseV2} from "@chainlink/contracts/src/v0.8/vrf/VRFConsumerBaseV2.sol";
 import {ERC1155} from "@openzeppelin/contracts/token/ERC1155/ERC1155.sol";
+import {ERC1155Burnable} from "@openzeppelin/contracts/token/ERC1155/extensions/ERC1155Burnable.sol";
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 
-contract Game is VRFConsumerBaseV2, ERC1155, Ownable {
+contract Game is VRFConsumerBaseV2, ERC1155, ERC1155Burnable, Ownable {
     /////////
     // Errors
     /////////
@@ -63,18 +64,28 @@ contract Game is VRFConsumerBaseV2, ERC1155, Ownable {
 
     mapping(address player => Character) private character;
 
+    /////////
+    // Events
+    /////////
+    event CharacterCreated(address indexed requester, uint256 indexed requestId);
+    event RequestFulfilled(uint256 indexed requestId, uint256[] indexed numWords);
+
     constructor(
         address _vrfCoordinator,
         bytes32 _gasLane,
         uint64 _subId,
         uint16 _requestConfirmations,
-        uint32 _callbackGasLimit
+        uint32 _callbackGasLimit,
+        uint256 _weaponUpgradePrice,
+        uint256 _legendaryFireSwordPrice
     ) VRFConsumerBaseV2(_vrfCoordinator) ERC1155("") {
         i_vrfCoordinator = VRFCoordinatorV2Interface(_vrfCoordinator);
         i_gasLane = _gasLane;
         s_subId = _subId;
         i_requestConfirmations = _requestConfirmations;
         i_callbackGasLimit = _callbackGasLimit;
+        s_weaponUpgradePrice = _weaponUpgradePrice;
+        s_legendaryFireSwordPrice = _legendaryFireSwordPrice;
     }
 
     function setURI(string memory newuri) public onlyOwner {
@@ -105,14 +116,30 @@ contract Game is VRFConsumerBaseV2, ERC1155, Ownable {
         if (weaponLevel == 1) {
             _burn(msg.sender, s_woodenSword, 1);
             _mint(msg.sender, s_steelSword, 1, "");
-            safeTransferFrom(msg.sender, address(this), s_gold, s_weaponUpgradePrice, "");
+            _burn(msg.sender, s_gold, s_weaponUpgradePrice);
+            // safeTransferFrom(msg.sender, address(this), s_gold, s_weaponUpgradePrice, "");
             character[msg.sender].weaponLevel = 2;
         } else if (weaponLevel == 2) {
             _burn(msg.sender, s_steelSword, 1);
             _mint(msg.sender, s_magicSword, 1, "");
-            safeTransferFrom(msg.sender, address(this), s_gold, s_weaponUpgradePrice, "");
+            _burn(msg.sender, s_gold, s_weaponUpgradePrice);
+            // safeTransferFrom(msg.sender, address(this), s_gold, s_weaponUpgradePrice, "");
             character[msg.sender].weaponLevel = 3;
         }
+    }
+
+    function enchantMagicWeaponToFireWeapon() public {
+        if (balanceOf(msg.sender, s_gold) < s_legendaryFireSwordPrice) {
+            revert Game__YouDontOwnEnoughGold(s_legendaryFireSwordPrice);
+        }
+        if (character[msg.sender].weaponLevel != 3) {
+            revert Game__OnlyMagicSwordCanBeEnchanted();
+        }
+        _burn(msg.sender, s_magicSword, 1);
+        _mint(msg.sender, s_legendaryFireSword, 1, "");
+        _burn(msg.sender, s_gold, s_legendaryFireSwordPrice);
+        // safeTransferFrom(msg.sender, address(this), s_gold, s_legendaryFireSwordPrice, "");
+        character[msg.sender].weaponLevel = 4;
     }
 
     function sendCharacterToMission() public returns (uint256 requestId) {
@@ -139,7 +166,7 @@ contract Game is VRFConsumerBaseV2, ERC1155, Ownable {
         });
         requestIds.push(requestId);
         lastRequestId = requestId;
-        // emit RequestSent(requestId, numWords);
+        emit CharacterCreated(msg.sender, requestId);
     }
 
     // 4hod (14400) 6hod (21600) 8hod (28800)       1hod (3600)
@@ -158,18 +185,10 @@ contract Game is VRFConsumerBaseV2, ERC1155, Ownable {
         _mint(msg.sender, s_gold, 2 * calculatedNumber, "");
     }
 
-    function enchantMagicWeaponToFireWeapon() public {
-        if (balanceOf(msg.sender, s_gold) < s_legendaryFireSwordPrice) {
-            revert Game__YouDontOwnEnoughGold(s_legendaryFireSwordPrice);
-        }
-        if (character[msg.sender].weaponLevel != 3) {
-            revert Game__OnlyMagicSwordCanBeEnchanted();
-        }
-        _burn(msg.sender, s_magicSword, 1);
-        _mint(msg.sender, s_legendaryFireSword, 1, "");
-        safeTransferFrom(msg.sender, address(this), s_gold, s_legendaryFireSwordPrice, "");
-        character[msg.sender].weaponLevel = 4;
-    }
+    // function mintGold(address _address, uint256 _amount) external onlyOwner {
+    //     _mint(msg.sender, s_gold, _amount, "");
+    //     _safeTransferFrom(msg.sender, _address, s_gold, _amount, "");
+    // }
 
     // function mint(
     //     address account,
@@ -220,7 +239,7 @@ contract Game is VRFConsumerBaseV2, ERC1155, Ownable {
         require(s_requests[_requestId].exists, "request not found");
         s_requests[_requestId].fulfilled = true;
         s_requests[_requestId].randomWords = _randomWords;
-        // emit RequestFulfilled(_requestId, _randomWords);
+        emit RequestFulfilled(_requestId, _randomWords);
     }
 
     function calculateRewards(uint256 _randomWord) public pure returns (uint256) {
@@ -233,5 +252,29 @@ contract Game is VRFConsumerBaseV2, ERC1155, Ownable {
         } else if (_randomWord < 10) {
             return 30;
         } else revert Game__FailedToCalculateRewards();
+    }
+
+    function getCharacterWeaponLevel(address _address) public view returns (uint256) {
+        return character[_address].weaponLevel;
+    }
+
+    function getCharacterMissionStatus(address _address) public view returns (bool) {
+        return character[_address].onMission;
+    }
+
+    function getCharacterMissionStart(address _address) public view returns (uint256) {
+        return character[_address].missionStartTimeStamp;
+    }
+
+    function getLatestRequestId() public view returns (uint256) {
+        return lastRequestId;
+    }
+
+    function getRequestIds() public view returns (uint256[] memory) {
+        return requestIds;
+    }
+
+    function getRequestMapping(uint256 _requestId) public view returns (RequestStatus memory) {
+        return s_requests[_requestId];
     }
 }
