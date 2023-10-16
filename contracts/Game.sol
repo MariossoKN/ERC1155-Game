@@ -17,7 +17,7 @@ contract Game is VRFConsumerBaseV2, ERC1155, ERC1155Burnable, Ownable {
     error Game__YouAlreadyOwnACharacter();
     error Game__NoCharacterFound();
     error Game__CharacterAlreadyOnMission();
-    error Game__CharacterStillOnMission(uint256 timePassed);
+    error Game__CharacterStillOnMission(int256 timeLeft);
     error Game__FailedToCalculateRewards();
     error Game__YourAddressDoesnOwnAnyCharacter();
     error Game__YouDontOwnEnoughGold(uint256 weaponUpgradePrice);
@@ -30,7 +30,7 @@ contract Game is VRFConsumerBaseV2, ERC1155, ERC1155Burnable, Ownable {
     //////////////////
     VRFCoordinatorV2Interface private immutable i_vrfCoordinator;
     bytes32 private immutable i_gasLane;
-    uint64 private immutable s_subId;
+    uint64 private immutable i_subId;
     uint16 private immutable i_requestConfirmations;
     uint32 private immutable i_callbackGasLimit;
     mapping(address requester => uint256 requestId) addressToRequestId;
@@ -53,8 +53,8 @@ contract Game is VRFConsumerBaseV2, ERC1155, ERC1155Burnable, Ownable {
     uint256 private s_magicSword = 4;
     uint256 private s_legendaryFireSword = 5;
     uint256 private s_missionTimeInSeconds = 28800;
-    uint256 private s_weaponUpgradePrice = 150;
-    uint256 private s_legendaryFireSwordPrice = 1500;
+    uint256 private s_weaponUpgradePrice;
+    uint256 private s_legendaryFireSwordPrice;
 
     struct Character {
         bool onMission;
@@ -81,7 +81,7 @@ contract Game is VRFConsumerBaseV2, ERC1155, ERC1155Burnable, Ownable {
     ) VRFConsumerBaseV2(_vrfCoordinator) ERC1155("") {
         i_vrfCoordinator = VRFCoordinatorV2Interface(_vrfCoordinator);
         i_gasLane = _gasLane;
-        s_subId = _subId;
+        i_subId = _subId;
         i_requestConfirmations = _requestConfirmations;
         i_callbackGasLimit = _callbackGasLimit;
         s_weaponUpgradePrice = _weaponUpgradePrice;
@@ -154,7 +154,7 @@ contract Game is VRFConsumerBaseV2, ERC1155, ERC1155Burnable, Ownable {
         // Will revert if subscription is not set and funded.
         requestId = i_vrfCoordinator.requestRandomWords(
             i_gasLane,
-            s_subId,
+            i_subId,
             i_requestConfirmations,
             i_callbackGasLimit,
             1
@@ -164,72 +164,50 @@ contract Game is VRFConsumerBaseV2, ERC1155, ERC1155Burnable, Ownable {
             exists: true,
             fulfilled: false
         });
+        addressToRequestId[msg.sender] = requestId;
         requestIds.push(requestId);
         lastRequestId = requestId;
         emit CharacterCreated(msg.sender, requestId);
     }
 
-    // 4hod (14400) 6hod (21600) 8hod (28800)       1hod (3600)
     function finishMission() public {
-        uint256 timePassed = block.timestamp - character[msg.sender].missionStartTimeStamp;
-        uint256 weaponLevel = character[msg.sender].weaponLevel;
-        if ((timePassed) < s_missionTimeInSeconds - (weaponLevel * 3600)) {
-            revert Game__CharacterStillOnMission(timePassed);
+        int256 timeLeft = calculateMissionTimeLeft(msg.sender);
+        if (timeLeft > 0) {
+            revert Game__CharacterStillOnMission(timeLeft);
         }
-        character[msg.sender].onMission = false;
         uint256 requestId = addressToRequestId[msg.sender];
-        if (s_requests[requestId].fulfilled = false) {
+        if (s_requests[requestId].fulfilled == false) {
             revert Game__WaitingForTheRandomNumber();
         }
-        uint256 calculatedNumber = calculateRewards(s_requests[requestId].randomWords[0] % 100);
-        _mint(msg.sender, s_gold, 2 * calculatedNumber, "");
+        character[msg.sender].onMission = false;
+        uint256 randomNumber = s_requests[requestId].randomWords[0] % 100;
+        uint256 calculatedNumber = calculateRewards(randomNumber);
+        _mint(msg.sender, s_gold, calculatedNumber, "");
+    }
+
+    function calculateRewards(uint256 _randomWord) public pure returns (uint256) {
+        if (_randomWord >= 60) {
+            return 20;
+        } else if (_randomWord >= 30) {
+            return 30;
+        } else if (_randomWord >= 10) {
+            return 40;
+        } else if (_randomWord < 10) {
+            return 60;
+        } else revert Game__FailedToCalculateRewards();
+    }
+
+    function calculateMissionTimeLeft(address _playerAddress) public view returns (int256) {
+        uint256 timePassed = block.timestamp - character[_playerAddress].missionStartTimeStamp;
+        uint256 weaponLevel = character[_playerAddress].weaponLevel;
+        uint256 missionTime = s_missionTimeInSeconds - (weaponLevel * 3600);
+        int256 timeLeft = int256(missionTime) - int256(timePassed);
+        return timeLeft;
     }
 
     // function mintGold(address _address, uint256 _amount) external onlyOwner {
     //     _mint(msg.sender, s_gold, _amount, "");
     //     _safeTransferFrom(msg.sender, _address, s_gold, _amount, "");
-    // }
-
-    // function mint(
-    //     address account,
-    //     uint256 id,
-    //     uint256 amount,
-    //     bytes memory data
-    // ) public onlyOwner {
-    //     _mint(account, id, amount, data);
-    // }
-
-    // function mintBatch(
-    //     address to,
-    //     uint256[] memory ids,
-    //     uint256[] memory amounts,
-    //     bytes memory data
-    // ) public onlyOwner {
-    //     _mintBatch(to, ids, amounts, data);
-    // }
-
-    // function requestRandomWords()
-    //     external
-    //     onlyOwner
-    //     returns (uint256 requestId)
-    // {
-    //     // Will revert if subscription is not set and funded.
-    //     requestId = i_vrfCoordinator.requestRandomWords(
-    //         i_gasLane,
-    //         s_subId,
-    //         i_requestConfirmations,
-    //         i_callbackGasLimit,
-    //         1
-    //     );
-    //     s_requests[requestId] = RequestStatus({
-    //         randomWords: new uint256[](0),
-    //         exists: true,
-    //         fulfilled: false
-    //     });
-    //     requestIds.push(requestId);
-    //     lastRequestId = requestId;
-    //     // emit RequestSent(requestId, numWords);
-    //     return requestId;
     // }
 
     function fulfillRandomWords(
@@ -242,16 +220,36 @@ contract Game is VRFConsumerBaseV2, ERC1155, ERC1155Burnable, Ownable {
         emit RequestFulfilled(_requestId, _randomWords);
     }
 
-    function calculateRewards(uint256 _randomWord) public pure returns (uint256) {
-        if (_randomWord >= 60) {
-            return 10;
-        } else if (_randomWord >= 30) {
-            return 15;
-        } else if (_randomWord >= 10) {
-            return 20;
-        } else if (_randomWord < 10) {
-            return 30;
-        } else revert Game__FailedToCalculateRewards();
+    function getVrfCoordinatorAddress() public view returns (VRFCoordinatorV2Interface) {
+        return i_vrfCoordinator;
+    }
+
+    function getGasLane() public view returns (bytes32) {
+        return i_gasLane;
+    }
+
+    function getSubId() public view returns (uint64) {
+        return i_subId;
+    }
+
+    function getWeaponUpgradePrice() public view returns (uint256) {
+        return s_weaponUpgradePrice;
+    }
+
+    function getLegendaryFireSwordPrice() public view returns (uint256) {
+        return s_legendaryFireSwordPrice;
+    }
+
+    function getMissionTimeInSeconds() public view returns (uint256) {
+        return s_missionTimeInSeconds;
+    }
+
+    function getRequestConfirmations() public view returns (uint16) {
+        return i_requestConfirmations;
+    }
+
+    function getCallbackGasLimit() public view returns (uint32) {
+        return i_callbackGasLimit;
     }
 
     function getCharacterWeaponLevel(address _address) public view returns (uint256) {
@@ -274,7 +272,15 @@ contract Game is VRFConsumerBaseV2, ERC1155, ERC1155Burnable, Ownable {
         return requestIds;
     }
 
+    function getRequestIdByAddress() public view returns (uint256) {
+        return addressToRequestId[msg.sender];
+    }
+
     function getRequestMapping(uint256 _requestId) public view returns (RequestStatus memory) {
         return s_requests[_requestId];
+    }
+
+    function getRandomNumber(uint256 _requestId) public view returns (uint256) {
+        return s_requests[_requestId].randomWords[0];
     }
 }
