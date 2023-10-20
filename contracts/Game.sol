@@ -1,9 +1,6 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.19;
 
-// Uncomment this line to use console.log
-// import "hardhat/console.sol";
-
 import {VRFCoordinatorV2Interface} from "@chainlink/contracts/src/v0.8/interfaces/VRFCoordinatorV2Interface.sol";
 import {VRFConsumerBaseV2} from "@chainlink/contracts/src/v0.8/vrf/VRFConsumerBaseV2.sol";
 import {ERC1155} from "@openzeppelin/contracts/token/ERC1155/ERC1155.sol";
@@ -33,19 +30,20 @@ contract Game is VRFConsumerBaseV2, ERC1155, ERC1155Burnable, Ownable {
     uint64 private immutable i_subId;
     uint16 private immutable i_requestConfirmations;
     uint32 private immutable i_callbackGasLimit;
-    mapping(address requester => uint256 requestId) addressToRequestId;
-    //     private s_requestIdToAddress;
+
+    // VRF variables
+    mapping(address requester => uint256 requestId) s_addressToRequestId;
+    mapping(uint256 => RequestStatus) private s_requests;
+    uint256 private s_lastRequestId;
+    uint256[] private s_requestIds;
+
     struct RequestStatus {
         bool fulfilled; // whether the request has been successfully fulfilled
         bool exists; // whether a requestId exists
         uint256[] randomWords;
     }
-    mapping(uint256 => RequestStatus) public s_requests;
-    uint256 public lastRequestId;
-    uint256[] public requestIds;
 
     string private s_uri;
-
     uint256 private s_character = 0;
     uint256 private s_gold = 1;
     uint256 private s_woodenSword = 2;
@@ -62,7 +60,7 @@ contract Game is VRFConsumerBaseV2, ERC1155, ERC1155Burnable, Ownable {
         uint8 weaponLevel;
     }
 
-    mapping(address player => Character) private character;
+    mapping(address player => Character) private s_addressToCharacter;
 
     /////////
     // Events
@@ -93,17 +91,17 @@ contract Game is VRFConsumerBaseV2, ERC1155, ERC1155Burnable, Ownable {
     }
 
     function createCharacter() public {
-        if (character[msg.sender].weaponLevel > 0) {
+        if (s_addressToCharacter[msg.sender].weaponLevel > 0) {
             revert Game__YouAlreadyOwnACharacter();
         }
-        character[msg.sender].weaponLevel = 1;
+        s_addressToCharacter[msg.sender].weaponLevel = 1;
         _mint(msg.sender, s_character, 1, "");
         _mint(msg.sender, s_gold, 50, "");
         _mint(msg.sender, s_woodenSword, 1, "");
     }
 
     function upgradeWeaponLevel() public {
-        uint256 weaponLevel = character[msg.sender].weaponLevel;
+        uint256 weaponLevel = s_addressToCharacter[msg.sender].weaponLevel;
         if (weaponLevel == 0) {
             revert Game__YourAddressDoesnOwnAnyCharacter();
         }
@@ -118,13 +116,13 @@ contract Game is VRFConsumerBaseV2, ERC1155, ERC1155Burnable, Ownable {
             _mint(msg.sender, s_steelSword, 1, "");
             _burn(msg.sender, s_gold, s_weaponUpgradePrice);
             // safeTransferFrom(msg.sender, address(this), s_gold, s_weaponUpgradePrice, "");
-            character[msg.sender].weaponLevel = 2;
+            s_addressToCharacter[msg.sender].weaponLevel = 2;
         } else if (weaponLevel == 2) {
             _burn(msg.sender, s_steelSword, 1);
             _mint(msg.sender, s_magicSword, 1, "");
             _burn(msg.sender, s_gold, s_weaponUpgradePrice);
             // safeTransferFrom(msg.sender, address(this), s_gold, s_weaponUpgradePrice, "");
-            character[msg.sender].weaponLevel = 3;
+            s_addressToCharacter[msg.sender].weaponLevel = 3;
         }
     }
 
@@ -132,25 +130,25 @@ contract Game is VRFConsumerBaseV2, ERC1155, ERC1155Burnable, Ownable {
         if (balanceOf(msg.sender, s_gold) < s_legendaryFireSwordPrice) {
             revert Game__YouDontOwnEnoughGold(s_legendaryFireSwordPrice);
         }
-        if (character[msg.sender].weaponLevel != 3) {
+        if (s_addressToCharacter[msg.sender].weaponLevel != 3) {
             revert Game__OnlyMagicSwordCanBeEnchanted();
         }
         _burn(msg.sender, s_magicSword, 1);
         _mint(msg.sender, s_legendaryFireSword, 1, "");
         _burn(msg.sender, s_gold, s_legendaryFireSwordPrice);
         // safeTransferFrom(msg.sender, address(this), s_gold, s_legendaryFireSwordPrice, "");
-        character[msg.sender].weaponLevel = 4;
+        s_addressToCharacter[msg.sender].weaponLevel = 4;
     }
 
     function sendCharacterToMission() public returns (uint256 requestId) {
         if (balanceOf(msg.sender, 0) == 0) {
             revert Game__NoCharacterFound();
         }
-        if (character[msg.sender].onMission == true) {
+        if (s_addressToCharacter[msg.sender].onMission == true) {
             revert Game__CharacterAlreadyOnMission();
         }
-        character[msg.sender].onMission = true;
-        character[msg.sender].missionStartTimeStamp = block.timestamp;
+        s_addressToCharacter[msg.sender].onMission = true;
+        s_addressToCharacter[msg.sender].missionStartTimeStamp = block.timestamp;
         // Will revert if subscription is not set and funded.
         requestId = i_vrfCoordinator.requestRandomWords(
             i_gasLane,
@@ -164,9 +162,9 @@ contract Game is VRFConsumerBaseV2, ERC1155, ERC1155Burnable, Ownable {
             exists: true,
             fulfilled: false
         });
-        addressToRequestId[msg.sender] = requestId;
-        requestIds.push(requestId);
-        lastRequestId = requestId;
+        s_addressToRequestId[msg.sender] = requestId;
+        s_requestIds.push(requestId);
+        s_lastRequestId = requestId;
         emit CharacterCreated(msg.sender, requestId);
     }
 
@@ -175,11 +173,11 @@ contract Game is VRFConsumerBaseV2, ERC1155, ERC1155Burnable, Ownable {
         if (timeLeft > 0) {
             revert Game__CharacterStillOnMission(timeLeft);
         }
-        uint256 requestId = addressToRequestId[msg.sender];
+        uint256 requestId = s_addressToRequestId[msg.sender];
         if (s_requests[requestId].fulfilled == false) {
             revert Game__WaitingForTheRandomNumber();
         }
-        character[msg.sender].onMission = false;
+        s_addressToCharacter[msg.sender].onMission = false;
         uint256 randomNumber = s_requests[requestId].randomWords[0] % 100;
         uint256 calculatedNumber = calculateRewards(randomNumber);
         _mint(msg.sender, s_gold, calculatedNumber, "");
@@ -191,24 +189,20 @@ contract Game is VRFConsumerBaseV2, ERC1155, ERC1155Burnable, Ownable {
         } else if (_randomWord >= 30) {
             return 30;
         } else if (_randomWord >= 10) {
-            return 40;
+            return 45;
         } else if (_randomWord < 10) {
-            return 60;
+            return 70;
         } else revert Game__FailedToCalculateRewards();
     }
 
     function calculateMissionTimeLeft(address _playerAddress) public view returns (int256) {
-        uint256 timePassed = block.timestamp - character[_playerAddress].missionStartTimeStamp;
-        uint256 weaponLevel = character[_playerAddress].weaponLevel;
+        uint256 timePassed = block.timestamp -
+            s_addressToCharacter[_playerAddress].missionStartTimeStamp;
+        uint256 weaponLevel = s_addressToCharacter[_playerAddress].weaponLevel;
         uint256 missionTime = s_missionTimeInSeconds - (weaponLevel * 3600);
         int256 timeLeft = int256(missionTime) - int256(timePassed);
         return timeLeft;
     }
-
-    // function mintGold(address _address, uint256 _amount) external onlyOwner {
-    //     _mint(msg.sender, s_gold, _amount, "");
-    //     _safeTransferFrom(msg.sender, _address, s_gold, _amount, "");
-    // }
 
     function fulfillRandomWords(
         uint256 _requestId,
@@ -253,27 +247,27 @@ contract Game is VRFConsumerBaseV2, ERC1155, ERC1155Burnable, Ownable {
     }
 
     function getCharacterWeaponLevel(address _address) public view returns (uint256) {
-        return character[_address].weaponLevel;
+        return s_addressToCharacter[_address].weaponLevel;
     }
 
     function getCharacterMissionStatus(address _address) public view returns (bool) {
-        return character[_address].onMission;
+        return s_addressToCharacter[_address].onMission;
     }
 
     function getCharacterMissionStart(address _address) public view returns (uint256) {
-        return character[_address].missionStartTimeStamp;
+        return s_addressToCharacter[_address].missionStartTimeStamp;
     }
 
     function getLatestRequestId() public view returns (uint256) {
-        return lastRequestId;
+        return s_lastRequestId;
     }
 
     function getRequestIds() public view returns (uint256[] memory) {
-        return requestIds;
+        return s_requestIds;
     }
 
-    function getRequestIdByAddress() public view returns (uint256) {
-        return addressToRequestId[msg.sender];
+    function getRequestIdByAddress(address _address) public view returns (uint256) {
+        return s_addressToRequestId[_address];
     }
 
     function getRequestMapping(uint256 _requestId) public view returns (RequestStatus memory) {
